@@ -7,24 +7,38 @@ batched_gemm_a8w8_smallB_blockscale — FP8 batched GEMM optimised for small B.
 Fixes CU starvation for DeepSeek V4 wo_a (B=2, K=4096, N=1024, M=1..1024).
 
 Techniques:
-  1. Grid collapse: B folded into M → (B*M_tiles, N_tiles, split_k) grid.
-  2. Split-K: K split across work-groups → 128 WGs at B=2, M=1 (42% AMD CU util).
-  3. Per-128-block W-scales in kernel (blockscale, no dequant/requant precision loss).
-  4. Fused bf16 write when split_k=1 — skips the partial-sum buffer entirely.
-  5. Flat reduce grid — reduces launch overhead for the multi-split reduction.
+  1. Grid collapse + split-K: (B*M_tiles, N_tiles, split_k) grid
+     → 128 WGs at B=2, M=1 → 42% CU utilisation on AMD 304-CU chip (was 5%).
+  2. Per-128-block W-scales loaded as 1-D vectors — no 128× register expansion.
+  3. Fused bf16 write when split_k=1 — eliminates the reduction kernel entirely.
+  4. Flat reduce grid — less launch overhead than the (B*M, N_tiles) alternative.
+  5. transpose_bm: accept activations in (M, B, K) ATOM natural layout — direct
+     fix for the hipBLAS strided-batched contract violation in ROCm/ATOM#773.
+  6. bf16_input entry-point: inline per-token-group quantization via Triton kernel
+     so callers pass raw BF16 activations without a separate act_quant launch.
 
-References: ROCm/aiter#3000, ROCm/ATOM#676.
+References: ROCm/aiter#3000, ROCm/ATOM#773 (deferred aiter fix), ROCm/ATOM#676.
 """
 
+import os
 from typing import Optional
+
 import torch
 import triton
 
 from aiter.ops.triton._triton_kernels.gemm.batched.batched_gemm_a8w8_smallB_blockscale import (
     _batched_gemm_a8w8_smallB_blockscale_kernel,
     _split_k_reduce_flat_kernel,
+    per_token_group_quant_kernel,
 )
 from aiter.ops.triton.utils.logger import AiterTritonLogger
+
+_FP8_E4M3_MAX = 448.0
+
+def _default_fp8_dtype() -> torch.dtype:
+    return (torch.float8_e4m3fnuz
+            if os.environ.get("AITER_AMD_FP8", "1") == "1"
+            else torch.float8_e5m2)
 
 _LOGGER = AiterTritonLogger()
 
@@ -139,3 +153,103 @@ def batched_gemm_a8w8_smallB_blockscale(
         )
 
     return C_out
+
+
+def per_token_group_quant(
+    X: torch.Tensor,
+    group_size: int = 128,
+    transpose_bm: bool = False,
+    fp8_dtype: Optional[torch.dtype] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Quantize activations per-token per-group to fp8.
+
+    Args:
+        X: Activations. Shape (B, M, K) normally, or (M, B, K) when
+           transpose_bm=True (the natural output layout of DeepSeek V4
+           attention: (tokens, n_local_groups, d_per_group)).
+        group_size: K-dimension quantisation group size (default 128).
+        transpose_bm: If True, X is in (M, B, K) layout. The output
+           X_q is always returned in canonical (B, M, K) layout.
+        fp8_dtype: fp8 dtype to use. Defaults to float8_e4m3fnuz on AMD
+           (AITER_AMD_FP8=1, the default) or float8_e5m2 on NVIDIA dev.
+
+    Returns:
+        Tuple of (X_q, scale):
+          X_q:   (B, M, K) fp8
+          scale: (B, M, K // group_size) fp32
+    """
+    if fp8_dtype is None:
+        fp8_dtype = _default_fp8_dtype()
+
+    if transpose_bm:
+        M_dim, B_dim, K = X.shape
+    else:
+        B_dim, M_dim, K = X.shape
+
+    assert K % group_size == 0
+    n_groups = K // group_size
+
+    X_q   = torch.empty(B_dim, M_dim, K, dtype=fp8_dtype, device=X.device)
+    scale = torch.empty(B_dim, M_dim, n_groups, dtype=torch.float32, device=X.device)
+
+    per_token_group_quant_kernel[(B_dim * M_dim, n_groups)](
+        X, X_q, scale,
+        M_dim, B_dim, K, group_size, n_groups,
+        fp8_max=_FP8_E4M3_MAX,
+        TRANSPOSE_BM=transpose_bm,
+    )
+    return X_q, scale
+
+
+def batched_gemm_a8w8_smallB_blockscale_bf16(
+    X: torch.Tensor,
+    B_weight: torch.Tensor,
+    B_scale: torch.Tensor,
+    split_k: int = 8,
+    BLOCK_M: int = 16,
+    BLOCK_N: int = 128,
+    BLOCK_K: int = 128,
+    A_group_size: int = 128,
+    B_block_size: int = 128,
+    transpose_bm: bool = False,
+    fp8_dtype: Optional[torch.dtype] = None,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """
+    Batched FP8 GEMM accepting raw BF16 activations (fused quantization).
+
+    Convenience entry-point that fuses per-token-group activation quantization
+    with the GEMM, so callers do not need a separate act_quant kernel launch.
+
+    transpose_bm=True accepts X in (M, B, K) layout — the output shape of
+    DeepSeek V4 attention (tokens, n_local_groups, d_per_group) — without
+    requiring .transpose(0,1) from the caller. This is the direct fix for
+    the hipBLAS strided-batched GEMM contract violation in ROCm/ATOM#773:
+    the non-contiguous output view of torch.bmm(out=...) corrupted tiles and
+    caused a GSM8K regression; this kernel avoids the view entirely.
+
+    Args:
+        X: BF16 activations. Shape (B, M, K) or (M, B, K) when transpose_bm=True.
+        B_weight: FP8 weights, shape (B, N, K), pre-quantized at load time.
+        B_scale: Per-block weight scales, shape (B, N, K // B_block_size), fp32.
+        split_k: K split factor (8 for small M, 1 for M≥256).
+        transpose_bm: Accept X in (M, B, K) ATOM natural layout.
+        fp8_dtype: fp8 activation dtype. Defaults to float8_e4m3fnuz on AMD.
+        out: Optional pre-allocated (B, M, N) bfloat16 output tensor.
+
+    Returns:
+        torch.Tensor: (B, M, N) bfloat16.
+    """
+    _LOGGER.info(
+        f"BATCHED_GEMM_A8W8_SMALLB_BLOCKSCALE_BF16: X={tuple(X.shape)} "
+        f"B={tuple(B_weight.shape)} transpose_bm={transpose_bm} split_k={split_k}"
+    )
+    A_q, A_scale = per_token_group_quant(
+        X, group_size=A_group_size, transpose_bm=transpose_bm, fp8_dtype=fp8_dtype
+    )
+    return batched_gemm_a8w8_smallB_blockscale(
+        A_q, B_weight, A_scale, B_scale,
+        split_k=split_k, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
+        A_group_size=A_group_size, B_block_size=B_block_size, out=out,
+    )
