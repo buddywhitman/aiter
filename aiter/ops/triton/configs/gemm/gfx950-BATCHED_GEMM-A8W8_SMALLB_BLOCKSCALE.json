@@ -1,0 +1,8 @@
+{
+    "B=2,K=4096,N=1024,M=1":   {"BLOCK_M": 16, "BLOCK_N": 128, "BLOCK_K": 128, "split_k": 8},
+    "B=2,K=4096,N=1024,M=4":   {"BLOCK_M": 16, "BLOCK_N": 128, "BLOCK_K": 128, "split_k": 8},
+    "B=2,K=4096,N=1024,M=16":  {"BLOCK_M": 16, "BLOCK_N": 128, "BLOCK_K": 128, "split_k": 4},
+    "B=2,K=4096,N=1024,M=64":  {"BLOCK_M": 16, "BLOCK_N": 128, "BLOCK_K": 128, "split_k": 8},
+    "B=2,K=4096,N=1024,M=256": {"BLOCK_M": 32, "BLOCK_N": 128, "BLOCK_K": 128, "split_k": 1},
+    "B=2,K=4096,N=1024,M=1024":{"BLOCK_M": 32, "BLOCK_N": 128, "BLOCK_K": 128, "split_k": 1}
+}
