@@ -537,14 +537,17 @@ def _grouped_topk(
 
     if HAS_BIAS:
         # Top-2-sum-per-group. To find the second-largest score per group
-        # without tl.argmax-on-3D, suppress the per-group max by exact-equality
-        # match (ties on float scores are negligible in DeepSeek workloads).
-        gm1_per_e = tl.sum(
-            gid_eq[None, :, :].to(tl.float32) * group_max1[:, None, :],
+        # suppress the per-group max by index (not equality) to avoid removing ties.
+        # Compute per-group argmax index
+        group_argmax1 = tl.argmax(expanded, axis=1)  # [BLOCK_M, NUM_EXPERT_GROUP]
+        # Broadcast argmax back to [BLOCK_M, BLOCK_N] for each expert's group
+        argmax_per_e = tl.sum(
+            gid_eq[None, :, :].to(tl.int32) * group_argmax1[:, None, :],
             axis=2,
         )  # [BLOCK_M, BLOCK_N]
+        expert_indices = tl.arange(0, BLOCK_N)[None, :]
         suppressed = tl.where(
-            scores_for_choice == gm1_per_e, float("-inf"), scores_for_choice
+            expert_indices == argmax_per_e, float("-inf"), scores_for_choice
         )
         sup_3d = suppressed[:, :, None].broadcast_to(BLOCK_M, BLOCK_N, NUM_EXPERT_GROUP)
         expanded2 = tl.where(gid_eq[None, :, :], sup_3d, float("-inf"))

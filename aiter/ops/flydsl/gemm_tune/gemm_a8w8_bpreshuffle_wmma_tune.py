@@ -156,7 +156,7 @@ class GemmA8W8BpreShuffleWmmaTuner(GemmCommonTuner):
             ki = kernels_list[i]
             if not kernel_fits_shape(ki, M, N, K):
                 continue
-            info = (info_keys, i, 0, ki.name, "flydsl")
+            info = (info_keys, i, ki.split_k, ki.name, "flydsl")
             tasks.append(
                 (
                     info,

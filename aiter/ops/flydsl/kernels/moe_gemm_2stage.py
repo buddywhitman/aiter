@@ -12,7 +12,6 @@ It is extracted from `tests/kernels/test_moe_gemm.py` so that:
 - `tests/` holds correctness/perf harnesses
 """
 
-import logging
 import os
 import functools
 from contextlib import contextmanager
@@ -3643,7 +3642,7 @@ def compile_moe_reduction(
 
     module_name = (
         f"moe_reduction_kernel_{'masked' if use_mask else 'plain'}"
-        f"_{dtype_str}_topk{topk}_md{model_dim}"
+        f"_{dtype_str}_topk{topk}_md{model_dim}_ne{num_experts}_abi_expertmask_topkids"
     )
 
     elem_bytes_c = (32 if dtype_str == "f32" else 16) // 8

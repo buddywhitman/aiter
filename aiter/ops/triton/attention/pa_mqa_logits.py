@@ -456,11 +456,12 @@ def deepgemm_fp8_paged_mqa_logits(
     num_block, block_Size, _, index_dim = kv_cache.size()
     _, max_block_len = kv_indices.size()
 
+    effective_wave_per_eu = WavePerEU
     if get_gfx() == "gfx1250" and not Preshuffle:
-        WavePerEU = 1
+        effective_wave_per_eu = 1
 
     TileQCount = batch_size * next_n
-    SplitKV = (max(1, TotalCuCount // TileQCount) + 4) // 5 * 5 * WavePerEU
+    SplitKV = (max(1, TotalCuCount // TileQCount) + 4) // 5 * 5 * effective_wave_per_eu
 
     assert ChunkK % KVBlockSize == 0 or KVBlockSize % ChunkK == 0
     assert block_Size == KVBlockSize
@@ -488,7 +489,7 @@ def deepgemm_fp8_paged_mqa_logits(
 
     VarCtxOpt = VarCtxSchedule is not None
     if VarCtxOpt:
-        grid = (TotalCuCount * WavePerEU, 1, 1)
+        grid = (TotalCuCount * effective_wave_per_eu, 1, 1)
     else:
         grid = (batch_size * next_n * SplitKV, 1, 1)
 
@@ -501,7 +502,7 @@ def deepgemm_fp8_paged_mqa_logits(
             KVBlockSize=KVBlockSize,
             HiddenDim=hidden_dim,
             is_padded_mode=is_padded_mode,
-            WavePerEU=WavePerEU,
+            WavePerEU=effective_wave_per_eu,
             VarCtxOpt=VarCtxOpt,
         )
         if triton_version >= Version("3.5.0"):

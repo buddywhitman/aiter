@@ -273,10 +273,13 @@ def gemm_mxfp4_preshuffle_gfx1250(
         (BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=gl.float32, layout=wmma_acc_layout
     )
 
-    # --- 1. Prologue: fill NUM_BUFFERS-1 LDS slots via TDM ---
+    # Guard against k_tiles < NUM_BUFFERS
+    pipeline_depth = min(NUM_BUFFERS, k_tiles)
+
+    # --- 1. Prologue: fill pipeline_depth LDS slots via TDM ---
     # Load-then-advance: each iter consumes the descriptor's current K
     # position, then steps it forward for the next load (prologue or main).
-    for _ in gl.static_range(NUM_BUFFERS):
+    for _ in gl.static_range(pipeline_depth):
         slot = load_idx % NUM_BUFFERS
         # slot index math (arith.muli) ahead of the copies so the four tdm async_loads emit back-to-back and the compiler can merge them.
         a_slot = smem_A.index(slot)
@@ -293,9 +296,9 @@ def gemm_mxfp4_preshuffle_gfx1250(
         load_idx += 1
 
     # --- 2. Pre-load tile 0 from LDS into registers ---
-    gl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 1) * 4)
+    gl.amd.gfx1250.tdm.async_wait((pipeline_depth - 1) * 4)
 
-    slot_c = compute_idx % NUM_BUFFERS
+    slot_c = compute_idx % pipeline_depth
     cur_A = smem_A.index(slot_c).load(layout=dot_a_layout)
     cur_B = depreshuffle_b_raw_to_kn(
         smem_B.index(slot_c), BLOCK_N=BLOCK_SIZE_N, BLOCK_K_BYTES=BLOCK_K_BYTES
@@ -308,7 +311,7 @@ def gemm_mxfp4_preshuffle_gfx1250(
     )
 
     # --- 3. Main loop: WMMA(cur) → TDM(future) → wait → pre-load(next) ---
-    main_iters = k_tiles - (NUM_BUFFERS)
+    main_iters = k_tiles - pipeline_depth
     for _ in range(main_iters):
         acc = gl.amd.gfx1250.wmma_scaled(
             cur_A, cur_AS, "e2m1", cur_B, cur_BS, "e2m1", acc
@@ -316,7 +319,7 @@ def gemm_mxfp4_preshuffle_gfx1250(
 
         # TDM load next tile (descriptors are already positioned by
         # the previous iter's / prologue's trailing update_tensor_descriptor)
-        slot = load_idx % NUM_BUFFERS
+        slot = load_idx % pipeline_depth
 
         a_slot = smem_A.index(slot)
         b_slot = smem_B.index(slot)
@@ -330,11 +333,11 @@ def gemm_mxfp4_preshuffle_gfx1250(
         gl.amd.gfx1250.tdm.async_load(as_desc, [0, off_s], as_slot)
         gl.amd.gfx1250.tdm.async_load(bs_desc, [0, off_s], bs_slot)
 
-        gl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 1) * 4)
+        gl.amd.gfx1250.tdm.async_wait((pipeline_depth - 1) * 4)
         load_idx += 1
 
         # Pre-load next tile from LDS into registers
-        next_slot = (compute_idx + 1) % NUM_BUFFERS
+        next_slot = (compute_idx + 1) % pipeline_depth
         cur_A = smem_A.index(next_slot).load(layout=dot_a_layout)
         cur_B = depreshuffle_b_raw_to_kn(
             smem_B.index(next_slot),
@@ -350,14 +353,14 @@ def gemm_mxfp4_preshuffle_gfx1250(
         compute_idx += 1
 
     # --- 4. Epilogue: drain remaining tiles (no new TDM loads) ---
-    for i in gl.static_range(NUM_BUFFERS - 1):
+    for i in gl.static_range(pipeline_depth - 1):
         acc = gl.amd.gfx1250.wmma_scaled(
             cur_A, cur_AS, "e2m1", cur_B, cur_BS, "e2m1", acc
         )
 
-        gl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 2 - i) * 4)
+        gl.amd.gfx1250.tdm.async_wait((pipeline_depth - 2 - i) * 4)
 
-        next_slot = (compute_idx + 1) % NUM_BUFFERS
+        next_slot = (compute_idx + 1) % pipeline_depth
         cur_A = smem_A.index(next_slot).load(layout=dot_a_layout)
         cur_B = depreshuffle_b_raw_to_kn(
             smem_B.index(next_slot),

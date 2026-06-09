@@ -306,7 +306,8 @@ def routing(
             HIST_BLOCK_M=HIST_BLOCK_M,
         )
         if num_tokens <= 16:
-            HIST_BLOCK_M = triton.next_power_of_2(num_tokens)
+            safe_num_tokens = max(num_tokens, 1)
+            HIST_BLOCK_M = triton.next_power_of_2(safe_num_tokens)
             sort_fn = sort_tokens_fused
         else:
             sort_fn = sort_tokens

@@ -23,9 +23,9 @@ import torch
 import triton
 import triton.language as tl
 
-# from sglang.srt.layers.attention.triton_ops.prefill_attention import (
-#     context_attention_fwd,
-# )
+from aiter.ops.triton.attention.prefill_attention import (
+    context_attention_fwd,
+)
 # from sglang.srt.utils import is_hip
 
 is_cuda_available = torch.cuda.is_available()

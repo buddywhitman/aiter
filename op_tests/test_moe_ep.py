@@ -488,6 +488,7 @@ def test_fmoe_ep_mxfp4(
     if quant_label == "a8w4_mxfp4":
         act = ActivationType.Silu
         gate_mode = GateMode.INTERLEAVE.value
+        os.environ["AITER_BF16_FP8_MOE_BOUND"] = "1"
     else:
         act = ActivationType.Silu
         gate_mode = GateMode.SEPARATED.value

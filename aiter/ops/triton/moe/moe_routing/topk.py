@@ -76,6 +76,24 @@ def grouped_topk(
     else:
         assert expert_group.dim() == 1 and expert_group.shape[0] == n_cols
         assert expert_group.dtype == torch.int32
+        # Validate expert_group mapping
+        assert expert_group.min() >= 0 and expert_group.max() < num_expert_group, (
+            f"expert_group values must be in [0, {num_expert_group}), "
+            f"got range [{expert_group.min()}, {expert_group.max()}]"
+        )
+        # Check no empty groups
+        group_counts = torch.bincount(expert_group, minlength=num_expert_group)
+        assert (group_counts > 0).all(), (
+            f"expert_group mapping has empty groups. "
+            f"Counts per group: {group_counts.tolist()}"
+        )
+        # Check worst-case selection can provide k experts
+        min_group_size = group_counts.min().item()
+        assert topk_group * min_group_size >= k, (
+            f"Cannot select {k} experts from {topk_group} groups "
+            f"(min group size = {min_group_size}, would yield at most "
+            f"{topk_group * min_group_size} experts)"
+        )
 
     # Block sizes — single BLOCK_N pass for DeepSeek envelope. BLOCK_N must
     # cover the shared-expert columns too so their bits fit in the bitmatrix.

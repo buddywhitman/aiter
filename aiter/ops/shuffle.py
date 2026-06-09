@@ -27,14 +27,29 @@ def shuffle_weight_gfx1250(w: torch.Tensor) -> torch.Tensor:
         w = w.permute(0, 2, 3, 1, 4).contiguous()
         w = w.view(N // 16, K * 16)
     elif w.ndim == 3:
-        E, K, N = w.shape
-        assert K % 32 == 0, f"K={K} must be divisible by 32"
-        assert N % 16 == 0, f"N={N} must be divisible by 16"
-        w = w.transpose(-1, -2)  # (E, N, K)
-        w = w.view(E, N // 16, 16, K // 32, 2, 16)
-        w = w.permute(0, 1, 3, 4, 2, 5).contiguous()
-        w = w.view(E, N // 16, K * 16)
-        w = w.transpose(-1, -2)  # (E, K*16, N//16)
+        E = w.shape[0]
+        # Detect layout: check which axis is divisible by 32 (K) vs 16 (N)
+        if w.shape[1] % 32 == 0 and w.shape[2] % 16 == 0:
+            # Input is (E, K, N)
+            K, N = w.shape[1], w.shape[2]
+            w = w.transpose(-1, -2)  # (E, N, K)
+            w = w.view(E, N // 16, 16, K // 32, 2, 16)
+            w = w.permute(0, 1, 3, 4, 2, 5).contiguous()
+            w = w.view(E, N // 16, K * 16)
+            w = w.transpose(-1, -2)  # (E, K*16, N//16)
+        elif w.shape[1] % 16 == 0 and w.shape[2] % 32 == 0:
+            # Input is (E, N, K)
+            N, K = w.shape[1], w.shape[2]
+            # Already in (E, N, K), no initial transpose needed
+            w = w.view(E, N // 16, 16, K // 32, 2, 16)
+            w = w.permute(0, 1, 3, 4, 2, 5).contiguous()
+            w = w.view(E, N // 16, K * 16)
+            w = w.transpose(-1, -2)  # (E, K*16, N//16)
+        else:
+            raise ValueError(
+                f"Cannot determine layout for shape {w.shape}: "
+                f"expected either (E, K%32==0, N%16==0) or (E, N%16==0, K%32==0)"
+            )
     else:
         raise ValueError(f"Expected 2D or 3D tensor, got {w.ndim}D")
 

@@ -1480,7 +1480,7 @@ def can_impl_fmha_v3_bwd(
         npssk &= (batch_stride_dv / batch_stride_v) == (nhead_q / nhead_k)
 
         hd128_case = (hdim_q == 128) and npssk
-        hd64_case = (hdim_q == 64 and is_v3_atomic_fp32 == False) and npssk
+        hd64_case = (hdim_q == 64 and not is_v3_atomic_fp32) and npssk
         ret = hd128_case or hd64_case
         ret &= not swa
 

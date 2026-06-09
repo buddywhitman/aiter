@@ -31,7 +31,8 @@ def kv_cache_cast_to_fp8(
     num_blocks, block_size, num_heads, head_dim = x.shape
     assert num_heads == 1
     x_amax = x.abs().float().amax(dim=3, keepdim=True).clamp(1e-4)
-    sf = x_amax / 240.0
+    fp8_max = torch.finfo(fp8_dtype).max
+    sf = x_amax / fp8_max
     x_scaled = (x * (1.0 / sf)).to(fp8_dtype)
 
     padding_size = 0 if not padding else (16 - (block_size * 4) % 16) % 16

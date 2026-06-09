@@ -580,16 +580,14 @@ def test_mla(
     err = None
     us_asm_decode = 1e12
     # The ASM decode baseline aborts for these MLA configs when lse is requested
-    if return_lse:
-        pass
-    elif (dtype == torch.bfloat16 and kvtype == torch.bfloat16) and nhead in [
+    if not return_lse and (dtype == torch.bfloat16 and kvtype == torch.bfloat16) and nhead in [
         16,
         32,
         64,
         128,
     ]:
         err, us_asm_decode = test_absorb_decode_bf16()
-    elif kvtype == dtypes.fp8 and nhead in [8, 16, 128]:
+    elif not return_lse and kvtype == dtypes.fp8 and nhead in [8, 16, 128]:
         err, us_asm_decode = test_absorb_decode_fp8()
 
     ret["decode:err"] = err

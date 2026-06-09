@@ -1418,7 +1418,7 @@ def get_2stage_cfgs(
             False,
         )
     # Debug: AITER_FLYDSL_FORCE=1 is for debug use.
-    _flydsl_force = os.environ.get("AITER_FLYDSL_FORCE", "1") == "1"
+    _flydsl_force = os.environ.get("AITER_FLYDSL_FORCE", "0") == "1"
     use_mxfp4_flydsl = (
         dtype in [dtypes.bf16, dtypes.fp16]
         and q_type == QuantType.per_1x32
@@ -1809,6 +1809,7 @@ def fused_moe_2stages(
     if stage2_func is _flydsl_stage2_wrapper and expert_mask is not None:
         extra_stage2_args["expert_mask"] = expert_mask
         extra_stage2_args["topk_ids"] = topk_ids
+        extra_stage2_args["global_topk_ids"] = topk_ids
     a2 = metadata.stage1(
         a1,
         w1,

@@ -109,6 +109,18 @@ def run_preshuffle_gemm_a8_gfx1250(
             f"[FlyDSL gfx1250] unsupported out dtype {Out.dtype}; expected bf16/fp16"
         )
 
+    # Device and output-shape validation
+    if not (XQ.device == WQ.device == x_scale.device == w_scale.device == Out.device):
+        raise RuntimeError(
+            f"[FlyDSL gfx1250] All tensors must be on the same device: "
+            f"XQ={XQ.device}, WQ={WQ.device}, x_scale={x_scale.device}, "
+            f"w_scale={w_scale.device}, Out={Out.device}"
+        )
+    if Out.shape != (M, N):
+        raise RuntimeError(
+            f"[FlyDSL gfx1250] Output shape mismatch: expected {(M, N)}, got {tuple(Out.shape)}"
+        )
+
     split_k = max(1, int(split_k))
     cluster_m = max(1, int(cluster_m))
     cluster_n = max(1, int(cluster_n))
@@ -118,9 +130,16 @@ def run_preshuffle_gemm_a8_gfx1250(
 
     # Pipeline depth needs >= 1 K tile per buffer (per split-k chunk).
     num_k_tiles = (K // split_k) // tile_k
-    nb = max(2, min(int(num_buffers), num_k_tiles))
+    nb = min(int(num_buffers), num_k_tiles)
     if nb not in _SUPPORTED_NUM_BUFFERS:
-        nb = max(b for b in _SUPPORTED_NUM_BUFFERS if b <= nb)
+        # Pick largest supported buffer count <= nb
+        supported_le_nb = [b for b in _SUPPORTED_NUM_BUFFERS if b <= nb]
+        if not supported_le_nb or max(supported_le_nb) > num_k_tiles:
+            raise ValueError(
+                f"[FlyDSL gfx1250] Unsupported pipeline depth: num_k_tiles={num_k_tiles}, "
+                f"num_buffers={num_buffers}, supported={_SUPPORTED_NUM_BUFFERS}"
+            )
+        nb = max(supported_le_nb)
 
     sa = _as_1d_fp32(x_scale, M, "x_scale")
     sb = _as_1d_fp32(w_scale, N, "w_scale")
@@ -130,6 +149,7 @@ def run_preshuffle_gemm_a8_gfx1250(
     if padded_m == M:
         a_dev = XQ.contiguous()
         sa_dev = sa
+        Out = Out.contiguous()
     else:
         a_dev = torch.zeros((padded_m, K), dtype=XQ.dtype, device=XQ.device)
         a_dev[:M] = XQ

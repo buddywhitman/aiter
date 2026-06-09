@@ -2,17 +2,11 @@ import random
 from typing import List, Optional, Tuple, Union
 import itertools
 import torch
-import aiter
-import pytest
-from aiter.test_common import checkAllclose, perftest, tensor_dump, tensor_load
-from aiter import pertoken_quant
 from aiter import dtypes
 from enum import Enum
-from einops import rearrange
 import argparse
 import os
 import numpy as np
-from aiter import paged_attention_ragged
 
 uniform_range = (-1, 1)
 
@@ -374,7 +368,6 @@ def test_paged_attention(
     #             f"_PARTITION_SIZE_ROCM={_PARTITION_SIZE_ROCM}")
 
     target_dtypes = [torch.float, torch.float, torch.bfloat16]
-    import itertools
 
     accu_bytes = list(itertools.accumulate(bytes_sizes, initial=0))
 

@@ -308,8 +308,6 @@ def _fused_qk_rope_cat_and_cache_mla_kernel(
     d_pe_offs = tl.arange(0, BLOCK_D_pe).to(tl.int64)
 
     if pid < B * QH:
-        # pid_b = pid // QH
-        # pid_hq = pid % QH
         # This is a new optimization that prioritized heavy workload WGs first
         pid_hq = pid // B
         pid_b = pid % B
@@ -368,7 +366,7 @@ def _fused_qk_rope_cat_and_cache_mla_kernel(
         )
 
         if OUTPUT_Q_NOPE_ZEROS_AND_Q_PE:
-            if pid < num_decode_toks_for_zeros * QH:
+            if pid < num_decode_toks_for_zeros * QH and pid_b < num_decode_toks_for_zeros:
                 decode_q_pe_out_ptrs = (
                     decode_q_pe_out_ptr
                     + pid_b * decode_q_pe_out_stride_b
