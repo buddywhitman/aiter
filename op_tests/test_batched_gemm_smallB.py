@@ -156,6 +156,12 @@ SHAPES = [
     (2,   64, 4096, 1024,  8, 16),   # M=64:  512 WGs (multi-wave)
     (2,  256, 4096, 1024,  1, 32),   # M=256: fused bf16 output (no reduction kernel)
     (2, 1024, 4096, 1024,  1, 32),   # M=1024: fused bf16 output
+    # ROCm/ATOM#960's real production shape (zufayu, DSv4-Pro TP=8, H=2/D=1024/R=4096/B=512):
+    # their tested fp8_einsum approach lost to BF16 by 1.9x at this exact shape.
+    # split_k=8 variant tests whether *this* kernel's grid-collapse approach
+    # (different from #960's fp8_einsum) does any better at the shape that matters.
+    (2,  512, 4096, 1024,  8, 16),   # M=512, split_k=8 (small-M-style dispatch)
+    (2,  512, 4096, 1024,  1, 32),   # M=512, split_k=1 (large-M-style dispatch)
     # Other batch sizes
     (1,    8,  512,  256,  4, 16),
     (4,    8,  512,  256,  4, 16),
