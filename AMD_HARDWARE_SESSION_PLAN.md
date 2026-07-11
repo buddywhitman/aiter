@@ -4,9 +4,15 @@ Supersedes `systems/prs/project4_smallb_fp8_aiter/AMD_BENCHMARK_INSTRUCTIONS.md`
 which is stale (wrong repo path, wrong file names, predates the NaN fix, the
 retargeted shapes, and the #3852 bonus task). That file now just points here.
 
-Two independent tasks, run in this order:
+Three independent tasks, run in this order (same instance, since the DSpark
+validation is arch-agnostic and doesn't need to wait for anything aiter-specific):
 1. **Small-B kernel benchmark** — the real question: does the kernel win anywhere.
 2. **ROCm/aiter#3852 tuned-config gap** — lower-risk bonus, real customer ask.
+3. **sglang DSpark speculators-checkpoint fix validation** — not AMD-specific, but
+   this is the GPU window that closes it. Full runbook:
+   `~/contribution/sglang/AMD_DSPARK_VALIDATION.md` (separate repo, separate file,
+   same instance). Do this one last -- it needs its own model download (~16GB for
+   Qwen3-8B + draft) and is independent of the other two.
 
 ---
 
