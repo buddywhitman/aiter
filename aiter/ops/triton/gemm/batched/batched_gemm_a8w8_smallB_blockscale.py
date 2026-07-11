@@ -33,18 +33,45 @@ from aiter.ops.triton._triton_kernels.gemm.batched.batched_gemm_a8w8_smallB_bloc
 )
 from aiter.ops.triton.utils.logger import AiterTritonLogger
 
-_FP8_E4M3_MAX = 448.0
-
 def _default_fp8_dtype() -> torch.dtype:
-    return (torch.float8_e4m3fnuz
-            if os.environ.get("AITER_AMD_FP8", "1") == "1"
-            else torch.float8_e5m2)
+    """
+    AMD's FP8 dtype is architecture-dependent, not a single fixed type: gfx942
+    (MI300X) uses the older float8_e4m3fnuz convention (max magnitude 240),
+    while gfx950+ (MI355X and newer) moved to the standard OCP float8_e4m3fn
+    (max magnitude 448) -- these are numerically different types. Picking the
+    wrong one doesn't just lose precision, it silently produces NaN: values
+    scaled assuming max=448 overflow e4m3fnuz's actual max=240 on cast
+    (verified: `torch.tensor([300.0]).to(torch.float8_e4m3fnuz)` -> nan).
+
+    aiter.utility.dtypes.get_dtype_fp8() already encodes the correct per-arch
+    mapping, but importing it unconditionally at module load would break this
+    kernel's AITER_TRITON_ONLY NVIDIA-dev testing path: that module imports
+    aiter.jit.utils.chip_info, which hard-requires a real ROCm install even
+    under AITER_TRITON_ONLY=1 (confirmed: raises RuntimeError / ModuleNotFoundError
+    off-ROCm regardless of that flag). Import it lazily, only on the AMD path.
+    """
+    if os.environ.get("AITER_AMD_FP8", "1") == "1":
+        try:
+            from aiter.utility.dtypes import get_dtype_fp8
+
+            return get_dtype_fp8()
+        except Exception:
+            # No ROCm runtime to resolve the exact arch from (e.g. testing on
+            # NVIDIA with AITER_AMD_FP8 left at its default). gfx942's dtype
+            # is the fallback; the fp8_max used below is always derived from
+            # whatever dtype is actually selected, so this fallback can't
+            # silently corrupt values the way a mismatched hardcoded max
+            # constant would -- it can only pick a numerically self-consistent
+            # but non-ideal type when the real arch can't be determined.
+            return torch.float8_e4m3fnuz
+    return torch.float8_e5m2
+
 
 _LOGGER = AiterTritonLogger()
 
 
 def batched_gemm_a8w8_smallB_blockscale(
-    A: torch.Tensor,           # [B, M, K] fp8 (float8_e4m3fnuz on AMD)
+    A: torch.Tensor,           # [B, M, K] fp8 (e4m3fnuz on gfx942, e4m3fn on gfx950+)
     B_weight: torch.Tensor,    # [B, N, K] fp8, weights stored row-major (N×K)
     A_scale: torch.Tensor,     # [B, M, K // A_group_size] fp32
     B_scale: torch.Tensor,     # [B, N, K // B_block_size] fp32
@@ -171,8 +198,9 @@ def per_token_group_quant(
         group_size: K-dimension quantisation group size (default 128).
         transpose_bm: If True, X is in (M, B, K) layout. The output
            X_q is always returned in canonical (B, M, K) layout.
-        fp8_dtype: fp8 dtype to use. Defaults to float8_e4m3fnuz on AMD
-           (AITER_AMD_FP8=1, the default) or float8_e5m2 on NVIDIA dev.
+        fp8_dtype: fp8 dtype to use. Defaults to the architecture-correct AMD
+           type (AITER_AMD_FP8=1, the default -- e4m3fnuz on gfx942, e4m3fn on
+           gfx950+) or float8_e5m2 on NVIDIA dev.
 
     Returns:
         Tuple of (X_q, scale):
@@ -193,10 +221,16 @@ def per_token_group_quant(
     X_q   = torch.empty(B_dim, M_dim, K, dtype=fp8_dtype, device=X.device)
     scale = torch.empty(B_dim, M_dim, n_groups, dtype=torch.float32, device=X.device)
 
+    # Derived from the actual dtype in use, not a hardcoded constant --
+    # e4m3fnuz (240), e4m3fn (448), and e5m2 (57344) all have different max
+    # magnitudes, and scaling against the wrong one silently produces NaN on
+    # cast rather than a clamp (see _default_fp8_dtype's docstring).
+    fp8_max = torch.finfo(fp8_dtype).max
+
     per_token_group_quant_kernel[(B_dim * M_dim, n_groups)](
         X, X_q, scale,
         M_dim, B_dim, K, group_size, n_groups,
-        fp8_max=_FP8_E4M3_MAX,
+        fp8_max=fp8_max,
         TRANSPOSE_BM=transpose_bm,
     )
     return X_q, scale
@@ -235,7 +269,8 @@ def batched_gemm_a8w8_smallB_blockscale_bf16(
         B_scale: Per-block weight scales, shape (B, N, K // B_block_size), fp32.
         split_k: K split factor (8 for small M, 1 for M≥256).
         transpose_bm: Accept X in (M, B, K) ATOM natural layout.
-        fp8_dtype: fp8 activation dtype. Defaults to float8_e4m3fnuz on AMD.
+        fp8_dtype: fp8 activation dtype. Defaults to the architecture-correct
+           AMD type (e4m3fnuz on gfx942, e4m3fn on gfx950+).
         out: Optional pre-allocated (B, M, N) bfloat16 output tensor.
 
     Returns:

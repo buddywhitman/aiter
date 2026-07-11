@@ -9,10 +9,15 @@ dequant + einsum reference. Covers the DeepSeek V4 wo_a shapes (B=2,
 K=4096, N=1024) from ROCm/aiter#3000.
 
 Run (AMD MI300X):
-    AITER_TRITON_ONLY=1 python op_tests/test_batched_gemm_smallB.py
+    AITER_TRITON_ONLY=1 AITER_AMD_FP8=1 python op_tests/test_batched_gemm_smallB.py
 
 Run (NVIDIA, software-emulated FP8, for CI):
     python op_tests/test_batched_gemm_smallB.py
+
+Note: AITER_AMD_FP8 defaults to "0" *in this test file* (opposite of the
+production kernel's own default of "1") specifically so that running this
+file with no extra env vars is always the safe, NVIDIA-emulated CI path --
+AITER_AMD_FP8=1 must be passed explicitly to exercise the real AMD dtype.
 """
 
 import argparse
@@ -28,10 +33,18 @@ from aiter.ops.triton.gemm.batched.batched_gemm_a8w8_smallB_blockscale import (
 # Quantisation helpers (self-contained, no external dependency)
 # ---------------------------------------------------------------------------
 
-# Use float8_e4m3fnuz on AMD (set AITER_AMD_FP8=1), otherwise float8_e5m2
+# Use float8_e4m3fnuz on AMD (set AITER_AMD_FP8=1), otherwise float8_e5m2.
+# float8_e4m3fnuz is gfx942 (MI300X)'s dtype specifically -- gfx950+ (MI355X)
+# uses the standard float8_e4m3fn instead (max 448 vs e4m3fnuz's max 240;
+# these are numerically different types, not just a naming difference). This
+# reference implementation intentionally stays self-contained (no import from
+# the kernel's own aiter.utility.dtypes) rather than arch-detecting, but
+# _FP8_MAX below is always derived from whichever dtype is actually in use --
+# not hardcoded -- so it can't silently mismatch and produce NaN on cast the
+# way a fixed constant paired with the wrong dtype would.
 _AMD_FP8 = __import__("os").environ.get("AITER_AMD_FP8", "0") == "1"
 FP8_DTYPE = torch.float8_e4m3fnuz if _AMD_FP8 else torch.float8_e5m2
-_FP8_MAX  = 448.0 if _AMD_FP8 else 57344.0
+_FP8_MAX = torch.finfo(FP8_DTYPE).max
 
 
 def _quantize_per_token_group(x_bf16: torch.Tensor, group_size: int = 128):

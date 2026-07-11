@@ -5,6 +5,7 @@ AMD MI300X/MI355X, so these numbers are directional, not the number to quote
 in the PR). Mirrors the DeepSeek V4 wo_a shapes from ROCm/aiter#3000.
 
 Run: AITER_TRITON_ONLY=1 PYTHONPATH=. python op_tests/bench_batched_gemm_smallB.py
+Run (AMD, exercises the real production dtype default): add AITER_AMD_FP8=1
 """
 
 import os
@@ -16,23 +17,30 @@ from aiter.ops.triton.gemm.batched.batched_gemm_a8w8_smallB_blockscale import (
     batched_gemm_a8w8_smallB_blockscale,
 )
 
+# float8_e4m3fnuz is gfx942 (MI300X)'s dtype; gfx950+ (MI355X) uses the
+# standard float8_e4m3fn instead (max 448 vs e4m3fnuz's max 240 -- different
+# types, not just a naming difference). _FP8_MAX is derived from whichever
+# dtype is actually selected, not hardcoded, so scale/clamp bounds always
+# match what the dtype can represent instead of silently producing NaN on
+# cast (verified: values scaled to 448 NaN when cast to e4m3fnuz).
 _AMD_FP8 = os.environ.get("AITER_AMD_FP8", "0") == "1"
 FP8_DTYPE = torch.float8_e4m3fnuz if _AMD_FP8 else torch.float8_e5m2
+_FP8_MAX = torch.finfo(FP8_DTYPE).max
 
 
 def _quantize_per_token_group(x_bf16: torch.Tensor, group_size: int = 128):
     B, M, K = x_bf16.shape
     x = x_bf16.view(B, M, K // group_size, group_size)
-    scale = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / 448.0
-    xq = (x / scale).clamp(-448, 448).to(FP8_DTYPE)
+    scale = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / _FP8_MAX
+    xq = (x / scale).clamp(-_FP8_MAX, _FP8_MAX).to(FP8_DTYPE)
     return xq.view(B, M, K), scale.view(B, M, K // group_size)
 
 
 def _quantize_weight(w_bf16: torch.Tensor, block: int = 128):
     B, N, K = w_bf16.shape
     w = w_bf16.view(B, N // block, block, K // block, block)
-    scale = w.abs().amax(dim=(2, 4), keepdim=True).clamp(min=1e-6) / 448.0
-    wq = (w / scale).clamp(-448, 448).to(FP8_DTYPE)
+    scale = w.abs().amax(dim=(2, 4), keepdim=True).clamp(min=1e-6) / _FP8_MAX
+    wq = (w / scale).clamp(-_FP8_MAX, _FP8_MAX).to(FP8_DTYPE)
     return wq.view(B, N, K), scale.view(B, N // block, K // block)
 
 

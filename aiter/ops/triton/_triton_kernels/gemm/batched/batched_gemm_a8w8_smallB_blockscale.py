@@ -16,9 +16,6 @@ References: ROCm/aiter#3000, ROCm/ATOM#773 (deferred fix), ROCm/ATOM#676.
 import triton
 import triton.language as tl
 
-_FP8_E4M3_MAX = 448.0
-
-
 # ---------------------------------------------------------------------------
 # Per-token-group activation quantization
 # ---------------------------------------------------------------------------
