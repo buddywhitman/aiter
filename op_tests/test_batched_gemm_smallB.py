@@ -162,6 +162,15 @@ SHAPES = [
     # (different from #960's fp8_einsum) does any better at the shape that matters.
     (2,  512, 4096, 1024,  8, 16),   # M=512, split_k=8 (small-M-style dispatch)
     (2,  512, 4096, 1024,  1, 32),   # M=512, split_k=1 (large-M-style dispatch)
+    # ROCm/ATOM#960 (zufayu, 2026-06-16): FP8+split-K is explicitly NOT the
+    # promising direction at H=2/TP=8 -- "gate fp8 wo_a to low-TP / large-M
+    # shapes where the einsum is actually compute-bound (H>=8, M>=2048), not
+    # TP=8." These shapes (low-TP -> more local groups per GPU -> larger B;
+    # large-M) are the regime zufayu says this class of kernel is actually
+    # worth it in, as distinct from the original issue #3000 B=2/small-M scope.
+    (8,  2048, 4096, 1024,  1, 32),  # H=8, M=2048: zufayu's stated compute-bound floor
+    (8,  4096, 4096, 1024,  1, 64),  # H=8, M=4096: further into compute-bound territory
+    (16, 2048, 4096, 1024,  1, 32),  # H=16 (lower TP still): more groups, same M floor
     # Other batch sizes
     (1,    8,  512,  256,  4, 16),
     (4,    8,  512,  256,  4, 16),

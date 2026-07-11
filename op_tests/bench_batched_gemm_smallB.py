@@ -96,3 +96,16 @@ if __name__ == "__main__":
     kernel_us, einsum_us = bench_one(B=2, M=512, K=4096, N=1024, split_k=8, BLOCK_M=16)
     print(f"M=512, split_k=8 (forced): kernel={kernel_us:.2f}us einsum={einsum_us:.2f}us "
           f"ratio={kernel_us / einsum_us:.2f}")
+
+    # ROCm/ATOM#960 (zufayu, 2026-06-16): explicitly NOT the B=2/TP=8 regime --
+    # "gate fp8 wo_a to low-TP / large-M shapes where the einsum is actually
+    # compute-bound (H>=8, M>=2048), not TP=8." These are that regime.
+    print()
+    print("Low-TP / large-M regime (zufayu's stated compute-bound floor, ATOM#960):")
+    print(f"{'B':>4} {'M':>6} {'kernel (us)':>14} {'einsum (us)':>14} {'ratio':>8}")
+    for B, M, BLOCK_M in ((8, 2048, 32), (8, 4096, 64), (16, 2048, 32)):
+        kernel_us, einsum_us = bench_one(
+            B=B, M=M, K=4096, N=1024, split_k=1, BLOCK_M=BLOCK_M
+        )
+        ratio = kernel_us / einsum_us
+        print(f"{B:>4} {M:>6} {kernel_us:>14.2f} {einsum_us:>14.2f} {ratio:>8.2f}")
